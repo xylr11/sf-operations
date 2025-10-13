@@ -1,0 +1,16 @@
+[project]
+name = "sf-operations"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "matplotlib>=3.10.6",
+    "notebook>=7.4.5",
+    "numpy>=2.3.3",
+    "polars>=1.33.1",
+    "pymc>=5.25.1",
+    "scikit-learn>=1.7.2",
+    "sf-quant>=0.1.13",
+    "torch>=2.8.0",
+    "tqdm>=4.67.1",
+    "xgboost>=3.0.5",
+]
