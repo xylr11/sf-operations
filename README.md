@@ -1,26 +1,32 @@
 # sf-operations
-Silver Fund operations team repo
+Silver Fund Operations Team Repository
 
-# Setup
-1. Clone the repo
-2. Install uv with
+## Tasks
+ - Combine signals 
+ - Risk budgeting 
+ - Gamma tuning 
+ - Transaction costs modeling
 
-curl -LsSf https://astral.sh/uv/install.sh | sh
+## Setup
+1. Clone the repository from GitHub.
+2. Install uv with:
 
-3. Check that uv is installed by running
+    ```curl -LsSf https://astral.sh/uv install.sh | sh```
 
-uv --version
+3. Check that uv is installed by running:
 
-If this returns an error you might need to add uv to your path. Run:
+    ```uv --version```
 
-source $HOME/.local/bin/env
+    If this returns an error you might need to add uv to your path. Run:
 
-Restart your terminal for the changes to take effect.
+    ```source $HOME/.local/bin/env```
+
+    Restart your terminal for the changes to take effect.
 
 4. Make a virtual environment by running 
 
-uv sync
+    ```uv sync```
 
-Activate it with 
+    Activate it with 
 
-source .venv/bin/activate
+    ```source .venv/bin/activate```
