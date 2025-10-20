@@ -5,7 +5,7 @@ Silver Fund Operations Team Repository
  - Combine signals 
  - Risk budgeting 
  - Gamma tuning 
- - Transaction costs modeling
+ - Transaction costs modeling 
 
 ## Setup
 1. Clone the repository from GitHub.
