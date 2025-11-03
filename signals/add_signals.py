@@ -1,8 +1,8 @@
 import polars as pl
 import datetime as dt
 
-def get_weights(df: pl.DataFrame, IC=0.05):
-    df = (
+def add_signals(df: pl.DataFrame, IC=0.05):
+    return (
         df.lazy()
         .sort(["barrid", "date"])
         .with_columns([ # Convert nasty percents to nice fractions

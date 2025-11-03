@@ -1,5 +1,6 @@
 import sf_quant.optimizer as sfo
 import sf_quant.backtester as sfb
+import sf_quant.data as sfd
 import polars as pl
 import datetime as dt
 import argparse
@@ -88,6 +89,33 @@ def get_signal_weights(df:pl.LazyFrame, signal: str, start, end, n_cpus=8, write
             weights.write_parquet(write_path)
 
     return weights
+
+def get_returns_from_weights(weights: pl.DataFrame):
+    """
+    I'm too lazy too write doc strings, but weights should have date, barrid, fwd_return, and weights,
+    in particular IT MUST HAVE fwd_return ALREADY!
+    """
+    start = weights["date"].min()
+    end = weights["date"].max()
+
+    benchmark = sfd.load_benchmark(start=start, end=end)
+
+    return (
+        weights.join(benchmark, on=["date", "barrid"], how="left", suffix="_bmk")
+        .with_columns(pl.col("weight").sub("weight_bmk").alias("weight_act"))
+        .with_columns(pl.col('weight', 'weight_act', 'weight_bmk').fill_null(0))
+        .rename({"weight": "total", "weight_bmk": "benchmark", "weight_act": "active"})
+        .unpivot(
+            index=["date", "barrid", "fwd_return"],
+            variable_name="portfolio",
+            value_name="weight",
+        )
+        .group_by("date", "portfolio")
+        .agg(pl.col("fwd_return").mul("weight").sum().alias("return"))
+        .sort("date", "portfolio")
+        # .with_columns(pl.col('return').shift(1).over('portfolio')) # Technically this should be shifted, but it causes annoying problems
+        .with_columns(pl.col('return').log1p().cum_sum().over('portfolio').alias('cumulative_log_return'))
+    )
 
 if __name__ == '__main__':
     # These prints here help debug, prob should be a debug mode lol
