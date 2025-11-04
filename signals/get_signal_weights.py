@@ -100,8 +100,13 @@ def get_returns_from_weights(weights: pl.DataFrame):
 
     benchmark = sfd.load_benchmark(start=start, end=end)
 
+    columns = ["date", "barrid", "return"]
+
+    returns = sfd.load_assets(start=start, end=end, in_universe=True, columns=columns).with_columns(pl.col("return").shift(-1).over("barrid").alias("fwd_return"))
+
     return (
-        weights.join(benchmark, on=["date", "barrid"], how="left", suffix="_bmk")
+        returns.join(weights, on=["date", "barrid"], how="left")
+        .join(benchmark, on=["date", "barrid"], how="left", suffix="_bmk")
         .with_columns(pl.col("weight").sub("weight_bmk").alias("weight_act"))
         .with_columns(pl.col('weight', 'weight_act', 'weight_bmk').fill_null(0))
         .rename({"weight": "total", "weight_bmk": "benchmark", "weight_act": "active"})

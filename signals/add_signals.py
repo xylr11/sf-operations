@@ -38,7 +38,7 @@ def add_signals(df: pl.DataFrame, IC=0.05):
             ((pl.col("momentum") - pl.col("momentum").mean().over("date")) 
         / pl.col("momentum").std().over("date")).alias("momentum_z"),
             ((pl.col("meanrev") - pl.col("meanrev").mean().over("date")) 
-        / pl.col("meanrev").std().over("date")).alias("meanrev_z"),
+        / pl.col("meanrev").std().over("date")).alias("meanrev_z"), # Prob should add ddof=1
             ((pl.col("bab") - pl.col("bab").mean().over("date")) 
         / pl.col("bab").std().over("date")).alias("bab_z")
         ])

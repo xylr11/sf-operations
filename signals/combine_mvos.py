@@ -5,7 +5,7 @@ import sys
 
 def combine_weights(weights_dir: Path, out_file: Path | None, lazy: bool=False) -> None:
     """
-    Combine weights from folder.
+    Combine weights from folder
     Parameters
     ----------
     weights_dir : Path
@@ -21,8 +21,8 @@ def combine_weights(weights_dir: Path, out_file: Path | None, lazy: bool=False) 
         A Polars DataFrame containing optimized portfolio weights across
         all backtest dates, with columns:
 
-        - ``date`` : datetime, portfolio date.
-        - ``barrid`` : str, asset identifier.
+        - ``date`` : datetime, portfolio date
+        - ``barrid`` : str, asset identifier
         - Columns of weights
     """
     # Collect all .parquet files (non-recursive)
@@ -73,7 +73,7 @@ def combine_weights(weights_dir: Path, out_file: Path | None, lazy: bool=False) 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Combine and pivot signal weight parquet files."
+        description="Combine and pivot signal weight parquet files"
     )
     parser.add_argument(
         "--weights_dir",
@@ -91,7 +91,7 @@ if __name__ == "__main__":
         "--lazy",
         action="store_true",
         action="store_true",
-        help="Use Polars lazy scanning for efficiency on large datasets.",
+        help="Use Polars lazy scanning for efficiency on large datasets",
     )
     args = parser.parse_args()
 
