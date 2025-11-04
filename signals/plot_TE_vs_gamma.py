@@ -28,7 +28,7 @@ def plot_TE_vs_gamma(signal='momentum', n=10, min=-1, max=2, start=dt.date.fromi
         # print(f"For gamma={gamma}:\n{gamma_table}")
         # tracking_error.append(gamma_table.item(0, "Volatility (%)") / 100)
         active = gamma_returns.filter(pl.col('portfolio') == "active")
-        tracking_error.append(active.select(pl.col("return").std(ddof=1)).item() / active.height)
+        tracking_error.append(active.select(pl.col("return").std(ddof=1)).item() * np.sqrt(252))
 
     print_dict = {gamma: tracking_error[i] for i, gamma in enumerate(domain)}
     print(print_dict)
