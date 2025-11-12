@@ -79,7 +79,7 @@ def get_signal_weights(df:pl.LazyFrame, signal: str, start, end, n_cpus=8, write
     else:
         n_dates = weights.select(pl.col("date")).n_unique()
         total_weight = weights.select(pl.col("weight")).sum().item()
-        print(f"[INFO] {signal} {start}–{end}: {n_dates} dates, total weight sum = {total_weight:.6f}")
+        print(f"[INFO] For signal={signal}, dates={start}–{end}, gamma={gamma}: {n_dates} dates, total weight sum = {total_weight:.6f}")
     
     # Write to parquet
     if write: 
