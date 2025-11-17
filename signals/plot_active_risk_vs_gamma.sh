@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=plot_TE_vs_gamma
-#SBATCH --output=logs/plot_TE_vs_gamma_%A_%a.out
-#SBATCH --error=logs/plot_TE_vs_gamma_%A_%a.err
+#SBATCH --job-name=plot_active_risk_vs_gamma
+#SBATCH --output=logs/plot_active_risk_vs_gamma_%A_%a.out
+#SBATCH --error=logs/plot_active_risk_vs_gamma_%A_%a.err
 #SBATCH --array=0-11
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=50G
@@ -20,7 +20,7 @@ time_ends=(
 )
 
 num_signals=${#signals[@]}
-num_years=${#year_starts[@]}
+num_years=${#time_starts[@]}
 
 signal_index=$(( SLURM_ARRAY_TASK_ID / num_years ))
 time_index=$(( SLURM_ARRAY_TASK_ID % num_years ))
@@ -33,4 +33,4 @@ end=${time_ends[$time_index]}
 
 echo "Plotting signal=$signal"
 source ../.venv/bin/activate
-python3 plot_TE_vs_gamma.py "$signal" 50 "$start" "$end"
+python3 plot_active_risk_vs_gamma.py "$signal" 50 "$start" "$end"

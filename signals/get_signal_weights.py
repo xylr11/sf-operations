@@ -122,6 +122,17 @@ def get_returns_from_weights(weights: pl.DataFrame):
         .with_columns(pl.col('return').log1p().cum_sum().over('portfolio').alias('cumulative_log_return'))
     )
 
+def get_active_weights_from_weights(weights: pl.DataFrame):
+    start = weights["date"].min()
+    end = weights["date"].max()
+
+    benchmark = sfd.load_benchmark(start=start, end=end)
+
+    all_weights = (weights.join(benchmark, on=["date", "barrid"], how="left", suffix="_bmk").with_columns(pl.col("weight").sub("weight_bmk").alias("weight_act"))
+    .with_columns(pl.col('weight_act').fill_null(0)))
+
+    return all_weights["date", "barrid", "weights_act"]
+
 if __name__ == '__main__':
     # These prints here help debug, prob should be a debug mode lol
 
