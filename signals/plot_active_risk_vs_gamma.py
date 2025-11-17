@@ -33,7 +33,8 @@ def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=2, start=dt.d
         else:
             active_weights = get_signal_weights.get_active_weights_from_weights(gamma_weights)
             # M: Finish this here by taking the sandwich product with the covariance matrix on each day, and averaging the active risks. 
-            # Then append to active_risk, and the plotting should just work as is
+            # Then append to active_risk, and the plotting should just work as is.
+            # The formula is active risk = \sqrt{w_a^T \Sigma w_a}, I believe (and then annualize by multiplying by \sqrt{252}).
 
     print_dict = {gamma: active_risk[i] for i, gamma in enumerate(domain)}
     print(print_dict)
