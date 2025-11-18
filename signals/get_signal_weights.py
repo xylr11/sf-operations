@@ -63,8 +63,7 @@ def get_signal_weights(df:pl.LazyFrame, signal: str, start, end, n_cpus=8, write
 
     constraints = [
         sfo.FullInvestment(),
-        sfo.LongOnly(),
-        sfo.NoBuyingOnMargin(),
+        # sfo.LongOnly(), # Reminder that no buying on margin was removed from here...
         sfo.UnitBeta()
     ]
 

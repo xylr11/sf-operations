@@ -11,9 +11,8 @@ from matplotlib import pyplot as plt
 import argparse
 from scipy.stats import linregress
 
-
-def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=2, start=dt.date.fromisoformat('2013-06-01'), end=dt.date.fromisoformat('2013-06-30'), historical=True):
-    df = pl.read_parquet('../data/russell_3000_daily.parquet').sort('barrid', 'date').filter(pl.col('price').gt(5))
+def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=5, start=dt.date.fromisoformat('2013-06-01'), end=dt.date.fromisoformat('2013-06-30'), historical=True):
+    df = pl.read_parquet('../data/russell_3000_daily.parquet').sort('barrid', 'date') # .filter(pl.col('price').gt(5)) Temporarily removing price filter
     signals = add_signals.add_signals(df)
     returns = signals.lazy().with_columns(pl.col('return').shift(-1).alias('fwd_return')).filter(
         (pl.col('date') >= start) &
@@ -27,8 +26,8 @@ def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=2, start=dt.d
         gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma)
         if historical:
             gamma_returns = get_signal_weights.get_returns_from_weights(gamma_weights.join(returns.select(['date', 'barrid', 'fwd_return']).collect(), on=['date', 'barrid']))
-            active = gamma_returns.filter(pl.col('portfolio') == "active")
-            active_risk.append(active.select(pl.col("return").std(ddof=1)).item() * np.sqrt(252))
+            active = gamma_returns.filter(pl.col('portfolio') == "active").with_columns(pl.col('return').truediv(100.))
+            active_risk.append(active.select(pl.col("return").std(ddof=1)).item() * np.sqrt(252.))
         
         else:
             active_weights = get_signal_weights.get_active_weights_from_weights(gamma_weights)
@@ -39,19 +38,19 @@ def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=2, start=dt.d
     print_dict = {gamma: active_risk[i] for i, gamma in enumerate(domain)}
     print(print_dict)
     
-    (m, b, r, p, err) = linregress(1 / domain[n // 2:], active_risk[n // 2:])
+    (m, b, r, p, err) = linregress(np.log(domain[n // 2:]), np.log(active_risk[n // 2:]))
     print(m, b, r, p, err)
 
     plt.scatter(domain, active_risk, label="Backtested points")
     plt.plot(
-        domain[n // 2:], m / domain[n // 2:] + b,
-        label=f"$\\frac{{1}}{{\\gamma}}$ regression:\n"
-            f"$r={r:.4f},\\ p={p:.4f},\\ err={err:.4f}$")
+        domain[n // 2:], np.exp(m * np.log(domain[n // 2:]) + b),
+        label=f"$\\log{{\\gamma}}$ regression: m={m:.4g},\\ b={b:.4g}\n"
+            f"$r={r:.4g},\\ p={p:.4g},\\ err={err:.4g}$")
     plt.title(f"Active Risk vs. Gamma ({signal}, {start}, {n})")
     plt.xlabel("Gamma")
     plt.ylabel("Active Risk")
     plt.legend()
-    plt.savefig(f'plots/regress_active_risk_vs_gamma_{signal}_{start}_{n}.png')
+    plt.savefig(f'plots/log_regression_active_risk_vs_gamma_{signal}_{start}_{n}.png')
     plt.clf()
     plt.close("all")
 
