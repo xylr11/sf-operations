@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 import argparse
 from scipy.stats import linregress
 
-def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=5, start=dt.date.fromisoformat('2013-06-01'), end=dt.date.fromisoformat('2013-06-30'), historical=True):
+def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=2.5, start=dt.date.fromisoformat('2013-06-01'), end=dt.date.fromisoformat('2013-06-30'), historical=True):
     df = pl.read_parquet('../data/russell_3000_daily.parquet').sort('barrid', 'date') # .filter(pl.col('price').gt(5)) Temporarily removing price filter
     signals = add_signals.add_signals(df)
     returns = signals.lazy().with_columns(pl.col('return').shift(-1).alias('fwd_return')).filter(
@@ -44,7 +44,7 @@ def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=5, start=dt.d
     plt.scatter(domain, active_risk, label="Backtested points")
     plt.plot(
         domain[n // 2:], np.exp(m * np.log(domain[n // 2:]) + b),
-        label=f"$\\log{{\\gamma}}$ regression: m={m:.4g},\\ b={b:.4g}\n"
+        label=f"$\\log{{\\gamma}}$ regression: $m={m:.4g},\\ b={b:.4g}$\n"
             f"$r={r:.4g},\\ p={p:.4g},\\ err={err:.4g}$")
     plt.title(f"Active Risk vs. Gamma ({signal}, {start}, {n})")
     plt.xlabel("Gamma")

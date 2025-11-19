@@ -6,7 +6,15 @@ import datetime as dt
 import argparse
 import os
 
-def get_signal_weights(df:pl.LazyFrame, signal: str, start, end, n_cpus=8, write=False, write_path=None, gamma=2):
+def get_signal_weights(df:pl.LazyFrame, 
+                       signal: str, 
+                       start, 
+                       end, 
+                       n_cpus=8, 
+                       write=False, 
+                       write_path=None, 
+                       gamma=2, 
+                       constraints=[sfo.FullInvestment(), sfo.UnitBeta(), sfo.LongOnly()]):
     """
     Get signal for df of date, barrid, and signal alpha.
 
@@ -61,11 +69,7 @@ def get_signal_weights(df:pl.LazyFrame, signal: str, start, end, n_cpus=8, write
         print("[WARNING] After filtering, input df was empty.")
         return None
 
-    constraints = [
-        sfo.FullInvestment(),
-        # sfo.LongOnly(), # Reminder that no buying on margin was removed from here...
-        sfo.UnitBeta()
-    ]
+    constraints = constraints
 
     weights = sfb.backtest_parallel(filtered.rename({f'{signal}_alpha': 'alpha'}), constraints, gamma=gamma, n_cpus=n_cpus)
 
