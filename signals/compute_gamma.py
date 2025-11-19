@@ -7,6 +7,7 @@ from sf_quant.data._factors import factors
 from sf_quant.data.covariance_matrix import _construct_factor_covariance_matrix
 from time import perf_counter
 from add_signals import add_signals
+from scipy.linalg import solve
 
 def load_factor_covariances(start, end):
     pass # At some point this should probably be written
@@ -40,10 +41,23 @@ def construct_covariance_pinv_matrix(date, timer=False):
 
     return cov_pinv
 
+def precompute_factor_inverses(B, F, D):
+    D_inv = 1 / D
+    W = D_inv * B
+    
+
 def get_gamma_from_alphas(alpha: pl.DataFrame, target: float, date):
     beta = sfd.load_assets_by_date(date, True, ["date", "barrid", "predicted_beta"]).sort("barrid").select("predicted_beta").to_numpy()
     constraints = np.hstack([np.ones_like(beta), beta]).T
     print(constraints)
+    
+    factor_exposures = sfd.load_exposures(date, date, True, ["date", "barrid"] + factors)
+    specific_risk = sfd.load_assets_by_date(date, True, ["date", "barrid", "specific_risk"]) # The sfd load functions have their kwargs out of order :skull:
+    D = specific_risk.sort("barrid").fill_nan(0).fill_null(0).select('specific_risk').to_numpy().flatten() / 1e4
+    B = factor_exposures.sort("barrid").fill_nan(0).fill_null(0).select(factors).to_numpy()
+    F = _construct_factor_covariance_matrix(date).select(factors).to_numpy() / 1e4
+
+
 
 if __name__ == "__main__":
     df = pl.read_parquet('../data/russell_3000_daily.parquet').sort('barrid', 'date').filter(pl.col('price').gt(5))

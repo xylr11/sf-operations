@@ -5,6 +5,23 @@ import polars as pl
 import datetime as dt
 import argparse
 import os
+import cvxpy as cp
+from sf_quant.optimizer.constraints import Constraint
+
+class NetZeroInvestment(Constraint):
+    """
+    Enforces a net zero-investment constraint.
+
+    This constraint ensures that the sum of all portfolio weights equals 0.
+
+    Examples
+    --------
+    >>> weights = cp.Variable(3)
+    >>> constraint = NetZeroInvestment()(weights)
+    """
+
+    def __call__(self, weights: cp.Variable, **kwargs) -> cp.Constraint:
+        return cp.sum(weights) == 0
 
 def get_signal_weights(df:pl.LazyFrame, 
                        signal: str, 
@@ -14,7 +31,7 @@ def get_signal_weights(df:pl.LazyFrame,
                        write=False, 
                        write_path=None, 
                        gamma=2, 
-                       constraints=[sfo.FullInvestment(), sfo.UnitBeta(), sfo.LongOnly()]):
+                       constraints=[sfo.UnitBeta(), sfo.FullInvestment(), sfo.LongOnly()]):
     """
     Get signal for df of date, barrid, and signal alpha.
 

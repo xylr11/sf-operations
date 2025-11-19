@@ -10,6 +10,7 @@ import datetime as dt
 from matplotlib import pyplot as plt
 import argparse
 from scipy.stats import linregress
+import sf_quant.optimizer as sfo
 
 def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=2.5, start=dt.date.fromisoformat('2013-06-01'), end=dt.date.fromisoformat('2013-06-30'), historical=True):
     df = pl.read_parquet('../data/russell_3000_daily.parquet').sort('barrid', 'date') # .filter(pl.col('price').gt(5)) Temporarily removing price filter
@@ -23,12 +24,15 @@ def plot_active_risk_vs_gamma(signal='momentum', n=10, min=-1, max=2.5, start=dt
     domain = np.logspace(min, max, n)
     active_risk = []
     for gamma in domain:
-        gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma)
+        if signal == 'bab':
+            gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma, constraints=[sfo.UnitBeta()])
+        else:
+            gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma)
+
         if historical:
             gamma_returns = get_signal_weights.get_returns_from_weights(gamma_weights.join(returns.select(['date', 'barrid', 'fwd_return']).collect(), on=['date', 'barrid']))
             active = gamma_returns.filter(pl.col('portfolio') == "active").with_columns(pl.col('return').truediv(100.))
             active_risk.append(active.select(pl.col("return").std(ddof=1)).item() * np.sqrt(252.))
-        
         else:
             active_weights = get_signal_weights.get_active_weights_from_weights(gamma_weights)
             # M: Finish this here by taking the sandwich product with the covariance matrix on each day, and averaging the active risks. 
