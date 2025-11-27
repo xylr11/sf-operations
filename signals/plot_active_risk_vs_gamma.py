@@ -20,22 +20,25 @@ def plot_active_risk_vs_gamma(signal='momentum', n=10, min=0, max=6, start=dt.da
         (pl.col('date') >= start) &
         (pl.col('date') <= end) &
         (pl.col(f'{signal}_alpha').is_not_null())
-        ).select(['date', 'barrid', f'{signal}_alpha', 'predicted_beta', 'fwd_return'
+        ).select(['date', 'barrid', f'{signal}_alpha', 'predicted_beta', 'fwd_return', 'return'
         ])
     domain = np.logspace(min, max, n, base=np.e)
     active_risk = []
     for gamma in domain:
         if signal == 'bab':
-            gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma, constraints=[sfo.UnitBeta(), sfo.LongOnly()])
+            # gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma, constraints=[sfo.UnitBeta()])
+            active_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma, constraints=[sfo.ZeroBeta()])
         else:
-            gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma)
+            # gamma_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma, constraints=[sfo.UnitBeta(), sfo.FullInvestment(), sfo.LongOnly()])
+            active_weights = get_signal_weights.get_signal_weights(returns, signal, start, end, gamma=gamma, constraints=[sfo.ZeroBeta(), get_signal_weights.NetZeroInvestment()])
 
         if historical:
-            gamma_returns = get_signal_weights.get_returns_from_weights(gamma_weights.join(returns.select(['date', 'barrid', 'fwd_return']).collect(), on=['date', 'barrid']))
-            active = gamma_returns.filter(pl.col('portfolio') == "active").with_columns(pl.col('return').truediv(100.))
+            # gamma_returns = get_signal_weights.get_returns_from_weights(gamma_weights.join(returns.select(['date', 'barrid', 'fwd_return']).collect(), on=['date', 'barrid']))
+            # active = gamma_returns.filter(pl.col('portfolio') == "active").with_columns(pl.col('return').truediv(100.))
+            active = active_weights.join(returns.select(['date', 'barrid', 'return']).collect(), on=['date', 'barrid']).group_by("date").agg(pl.col("return").mul("weight").sum().alias("return"))
             active_risk.append(active.select(pl.col("return").std()).item() * np.sqrt(252.))
         else:
-            active_weights = get_signal_weights.get_active_weights_from_weights(gamma_weights)
+            # active_weights = get_signal_weights.get_active_weights_from_weights(gamma_weights)
             active_risks = []
             for date in active_weights["date"].unique().sort().to_list():
                 barrids = active_weights.filter(pl.col('date').eq(date))['barrid'].unique().sort().to_list()
@@ -51,16 +54,16 @@ def plot_active_risk_vs_gamma(signal='momentum', n=10, min=0, max=6, start=dt.da
     (m, b, r, p, err) = linregress(np.log(domain[n // 2:]), np.log(active_risk[n // 2:]))
     print(m, b, r, p, err)
 
-    plt.scatter(domain, active_risk, label="Backtested points")
+    plt.scatter(domain, active_risk, label="Backtested points", edgecolors='none', alpha=.7)
     plt.plot(
-        domain[n // 2:], np.exp(m * np.log(domain[n // 2:]) + b),
+        domain[n // 2:], np.exp(m * np.log(domain[n // 2:]) + b), color='black',
         label=f"$\\log{{\\gamma}}$ regression: $m={m:.4g},\\ b={b:.4g}$\n"
             f"$r={r:.4g},\\ p={p:.4g},\\ err={err:.4g}$")
     plt.title(f"Active Risk vs. Gamma ({signal}, {start}, {n})")
     plt.xlabel("Gamma")
     plt.ylabel("Active Risk")
     plt.legend()
-    plt.savefig(f'plots/historical_log_regression_active_risk_vs_gamma_{signal}_{start}_{n}.png')
+    plt.savefig(f'plots/historical_log_regression_active_risk_vs_gamma_{signal}_{start}_{n}.png', dpi=400)
     plt.clf()
     plt.close("all")
 
