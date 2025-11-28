@@ -1,69 +1,211 @@
 import polars as pl
-from numpy.linalg import pinv
 import numpy as np
 import sf_quant.data as sfd
 import datetime as dt
 from sf_quant.data._factors import factors
 from sf_quant.data.covariance_matrix import _construct_factor_covariance_matrix
-import sf_quant.backtester as sfb
 from time import perf_counter
-from add_signals import add_signals
 from scipy.sparse.linalg import LinearOperator
 from scipy.sparse.linalg import minres
-from scipy.sparse.linalg import cg
-import get_signal_weights
-import sf_quant.optimizer as sfo
+from tqdm import tqdm
 
-def load_factor_covariances(start, end):
-    pass # At some point this should probably be written
+def iter_factor_data(start, end):
+    """
+    Stream factor-model inputs between two dates (inclusive).
 
-def construct_covariance_pinv_matrix(date, timer=False):
-    if timer:
-        start = perf_counter()
+    Yields (date, data) tuples where ``data`` is a dict containing:
+        - ``B``: factor exposure matrix (n_assets x n_factors)
+        - ``F``: factor covariance matrix (n_factors x n_factors)
+        - ``D``: specific risk variances (length n_assets)
+        - ``barrid``: asset identifiers ordered consistently with ``B`` rows
+    """
+    exposures = (
+        sfd.load_exposures(start, end, True, ["date", "barrid"] + factors)
+        .fill_nan(0)
+        .fill_null(0)
+    )
+    specific_risk = (
+        sfd.load_assets(start, end, ["date", "barrid", "specific_risk"], in_universe=True)
+        .fill_nan(0)
+        .fill_null(0)
+    )
 
-    factor_exposures = sfd.load_exposures(date, date, True, ["date", "barrid"] + factors)
-    specific_risk = sfd.load_assets_by_date(date, True, ["date", "barrid", "specific_risk"]) # The sfd load functions have their kwargs out of order :skull:
-    A = np.diag(specific_risk.sort("barrid").fill_nan(0).fill_null(0).select('specific_risk').to_numpy().flatten()) / 1e4
-    U = factor_exposures.sort("barrid").fill_nan(0).fill_null(0).select(factors).to_numpy()
-    C = _construct_factor_covariance_matrix(date).select(factors).to_numpy() / 1e4
-    cov = U @ C @ U.T + A
+    dates = sorted(exposures.select("date").unique().to_series().to_list())
 
-    if timer:
-        end = perf_counter()
-        print(f"[INFO] Loading data for construct_covariance_pinv_matrix on {date} took {end - start} seconds.")
-        start = perf_counter()
-        
-    A_pinv = pinv(A)
-    cov_pinv = A_pinv - A_pinv @ U @ pinv(pinv(C) + U.T @ A_pinv @ U) @ U.T @ A_pinv
-    I_p = cov @ cov_pinv
+    for date in tqdm(dates, desc="Loading factor data"):
+        exp_date = exposures.filter(pl.col("date").eq(date)).sort("barrid")
+        if exp_date.is_empty():
+            continue
 
-    if not np.allclose(I_p, np.eye(I_p.shape[0])):
-        raise Warning(f"[WARNING] {date}: cov_pinv is not a true inverse (this can generally be ignored).")
-    
-    if timer:
-        end = perf_counter()
-        print(f"[INFO] Computing the inverse on {date} took {end - start} seconds.")
+        # Align specific risk to exposure ordering
+        sr_date = (
+            exp_date.select("barrid")
+            .join(
+                specific_risk.filter(pl.col("date").eq(date)).select(
+                    "barrid", "specific_risk"
+                ),
+                on="barrid",
+                how="left",
+            )
+            .fill_null(0)
+            .fill_nan(0)
+            .sort("barrid")
+        )
 
-    return cov_pinv
+        barrids = exp_date.select("barrid").to_series().to_list()
+        B = exp_date.select(factors).to_numpy()
+        F = (
+            _construct_factor_covariance_matrix(date)
+            .fill_nan(0)
+            .fill_null(0)
+            .select(factors)
+            .to_numpy()
+            / 1e4
+        )
+        D = np.square(sr_date.select("specific_risk").to_numpy().flatten()) / 1e4
+
+        yield date, {"B": B, "F": F, "D": D, "barrid": np.array(barrids)}
+
+def load_factor_data(start, end):
+    """
+    Materialize factor-model inputs between two dates (inclusive) into a dict.
+
+    This wraps :func:`iter_factor_data` for callers that want everything in memory.
+    """
+    return {date: data for date, data in iter_factor_data(start, end)}
+
+def build_signal_factor_inputs(start, end, signal, df):
+    """
+    Combine signal alphas with factor inputs for each date.
+
+    Parameters
+    ----------
+    start, end : datetime-like
+        Date range to include (inclusive).
+    signal : str
+        Name of the signal; the alpha column is expected to be ``{signal}_alpha``.
+    df : pl.DataFrame or pl.LazyFrame
+        Data containing ``date``, ``barrid`` and the signal alpha column.
+
+    Returns
+    -------
+    dict
+        Keys are dates; values are dicts with ``alpha`` (np.ndarray aligned to
+        the factor exposure ordering) and the ``B``, ``F``, ``D`` matrices from
+        :func:`load_factor_data`.
+    """
+    alpha_col = f"{signal}_alpha"
+
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    if alpha_col not in df.columns:
+        raise ValueError(f"Column '{alpha_col}' not found in provided dataframe.")
+
+    filtered = (
+        df.filter(
+            (pl.col("date") >= start)
+            & (pl.col("date") <= end)
+            & pl.col(alpha_col).is_not_null()
+        )
+        .select(["date", "barrid", alpha_col])
+    )
+
+    alpha_by_date = {}
+    for frame in filtered.partition_by("date", maintain_order=True):
+        date_value = frame["date"][0]
+        alpha_by_date[date_value] = dict(
+            zip(frame["barrid"].to_list(), frame[alpha_col].to_list())
+        )
+
+    factor_data = load_factor_data(start, end)
+    combined = {}
+
+    for date, data in factor_data.items():
+        barrids = data.get("barrid")
+        if barrids is None:
+            raise ValueError("Factor data missing barrid ordering; rerun load_factor_data.")
+
+        alpha_map = alpha_by_date.get(date, {})
+        alpha_vec = np.array([alpha_map.get(b, 0.0) for b in barrids])
+
+        combined[date] = {
+            "alpha": alpha_vec,
+            "B": data["B"],
+            "F": data["F"],
+            "D": data["D"],
+        }
+
+    return combined
+
+def iter_factor_mvos(start, end, signal, df, A=None, b=None, L=None, d=None, d_floor=1e-8):
+    """
+    Stream per-date FactorMVO instances with alphas aligned to factor exposures.
+
+    Parameters
+    ----------
+    start, end : datetime-like
+        Date range to include (inclusive).
+    signal : str
+        Signal name; alpha column must be ``{signal}_alpha``.
+    df : pl.DataFrame or pl.LazyFrame
+        Source data containing alphas.
+    A, b, L, d : optional
+        Constraint matrices/vectors to pass into :class:`FactorMVO`.
+    d_floor : float
+        Lower bound for specific risk diagonal entries in the optimizer.
+
+    Yields
+    ------
+    tuple
+        (date, FactorMVO) for each available date.
+    """
+    alpha_col = f"{signal}_alpha"
+
+    if isinstance(df, pl.LazyFrame):
+        df = df.collect()
+
+    if alpha_col not in df.columns:
+        raise ValueError(f"Column '{alpha_col}' not found in provided dataframe.")
+
+    # Keep only relevant slice of alpha data up front
+    alpha_slice = (
+        df.filter(
+            (pl.col("date") >= start)
+            & (pl.col("date") <= end)
+            & pl.col(alpha_col).is_not_null()
+        )
+        .select(["date", "barrid", alpha_col])
+    )
+
+    alpha_by_date = {}
+    for frame in alpha_slice.partition_by("date", maintain_order=True):
+        date_value = frame["date"][0]
+        alpha_by_date[date_value] = dict(
+            zip(frame["barrid"].to_list(), frame[alpha_col].to_list())
+        )
+
+    for date, data in iter_factor_data(start, end):
+        barrids = data["barrid"]
+        alpha_map = alpha_by_date.get(date, {})
+        alpha_vec = np.array([alpha_map.get(b, 0.0) for b in barrids])
+
+        yield date, FactorMVO(alpha_vec, data["B"], data["F"], data["D"], A=A, b=b, L=L, d=d, d_floor=d_floor)
 
 class FactorMVO:
     """
-    Factor-model mean-variance optimizer without inverting anything and hopefully without computing cov.
+    Factor-model mean-variance optimizer that applies the factor covariance as a LinearOperator
+    (no explicit nxn covariance materialization).
 
-    Objective: maximize   alpha^T w  - gamma * w^T Cov w
-    Cov = B F B^T + diag(D)
-
-    Constraints:
-        A w = b
-        L w <= d (this is element-wise)
-        sqrt(w^T Cov w) <= active_risk_target (same here)
+    Objective: maximize alpha^T w - (gamma / 2) * w^T Cov w,  Cov = B F B^T + diag(D)
+    Constraints: A w = b, optional L w <= d (not implemented here), or target active risk.
     """
 
-    def __init__(self, alpha, B, F, D, A=None, b=None, L=None, d=None):
+    def __init__(self, alpha, B, F, D, A=None, b=None, L=None, d=None, d_floor=1e-8):
         self.alpha = alpha          # n
         self.B = B                  # n × k
         self.F = F                  # k × k
-        self.D = D                  # n
+        self.D = np.maximum(D, d_floor)  # n, floor to keep H SPD enough for Krylov
         self.A = A                  # m × n  (equality constraints, e.g. UnitBeta, ZeroBeta, FullInvestment)
         self.b = b                  # m
         self.L = L                  # p × n  (inequality constraints, e.g. LongOnly. Must be less than version, hence L)
@@ -73,6 +215,7 @@ class FactorMVO:
         self.k = F.shape[0]
     
     def _make_H_operator(self, gamma):
+        """Return LinearOperator for Hessian gamma*Cov without forming Cov."""
         n, k = self.B.shape
 
         def matvec(x):
@@ -80,7 +223,7 @@ class FactorMVO:
             Btx = self.B.T @ x            # R^k
             F_Btx = self.F @ Btx         # R^k
             B_F_Btx = self.B @ F_Btx  # R^n
-            return 2 * gamma * (B_F_Btx + self.D * x)
+            return gamma * (B_F_Btx + self.D * x)
 
         return LinearOperator(
             shape=(n, n),
@@ -118,9 +261,7 @@ class FactorMVO:
         )
 
     def cov_times(self, w):
-        """Compute Cov * w without forming Cov explicitly.
-        Some scratch work shows this is about 10x faster than the naive method with n~3000, k~300, more generally n/k times speedup
-        """
+        """Compute Cov * w without forming Cov explicitly."""
         Bw = self.B.T @ w              # k
         F_Bw = self.F @ Bw             # k
         return self.B @ F_Bw + self.D * w
@@ -129,11 +270,29 @@ class FactorMVO:
         """Compute sqrt( w^T Cov w )."""
         return np.sqrt(w @ self.cov_times(w))
 
+    def kkt_residuals(self, w, gamma):
+        """Return (||A w - b||_2, ||g + A^T lambda||_2) with g = -alpha + gamma*Cov w."""
+        g = -self.alpha + gamma * self.cov_times(w)
+
+        if self.A is None:
+            primal = 0.0
+            dual = np.linalg.norm(g)
+            return primal, dual
+
+        primal_vec = self.A @ w - self.b
+        # Solve for lambda in (A A^T) lambda = A (-g) to get best dual residual
+        ATA = self.A @ self.A.T
+        rhs = self.A @ (-g)
+        lam, *_ = np.linalg.lstsq(ATA, rhs, rcond=None)
+        dual_vec = g + self.A.T @ lam
+
+        return np.linalg.norm(primal_vec), np.linalg.norm(dual_vec)
+
     def solve(self, gamma, active_risk_target=None, max_iter=50, tol=1e-8, debug=False):
         """
         Solve:
-            maximize alpha^T w - gamma * w^T Cov w
-        with constraints (these will need to be made somewhat accessible, not sure about what the best form is).
+            maximize alpha^T w - (gamma / 2) * w^T Cov w
+        with constraints.
         active_risk_target: impose sqrt(w^T Cov w) = active_risk_target via bisection on gamma.
         """
 
@@ -144,12 +303,9 @@ class FactorMVO:
         # KKT solve for fixed gamma
         return self._solve_fixed_gamma(gamma, max_iter=max_iter, tol=tol, debug=debug)
 
-    def _solve_fixed_gamma(self, gamma, max_iter=50, tol=1e-8, debug=False):
+    def _solve_fixed_gamma(self, gamma, max_iter=500, tol=1e-8, debug=False, w0=None):
         """
-        Solve with KKT I think:
-            maximize alpha^T w - gamma * w^T Cov w
-            A w = b      
-            L w <= d     (handled via projected Newton; probably there is a better method I don't know about)
+        Newton solve for fixed gamma with equality constraints via KKT MINRES.
         """
 
         if debug:
@@ -157,19 +313,22 @@ class FactorMVO:
             print(f'[INFO] Started optimizer with gamma={gamma}.')
 
         n = self.n
-        w = np.zeros(n)
+        w = np.zeros(n) if w0 is None else w0.copy()
 
         A = self.A
         b = self.b
         m = 0 if A is None else A.shape[0]
 
+        lin_maxiter = max(500, 5 * self.n)
+
+        converged = False
         # Newton loop
         for _ in range(max_iter): # Might want to track and return this
 
-            # Gradient: g = - alpha + 2 gamma Cov w   (negative because maximizing)
-            g = -self.alpha + 2 * gamma * self.cov_times(w)
+            # Gradient: g = - alpha + gamma Cov w   (negative because maximizing)
+            g = -self.alpha + gamma * self.cov_times(w)
 
-            # Hessian operator: H v = 2 gamma Cov v
+            # Hessian operator: H v = gamma Cov v
             # We apply Cov v via cov_times.
 
             # Build KKT system:
@@ -186,39 +345,47 @@ class FactorMVO:
 
             if m == 0:
                 H_op = self._make_H_operator(gamma)
-                dw, _ = cg(H_op, -g, rtol=1e-10)
+                dw, info = minres(H_op, -g, rtol=1e-10, maxiter=lin_maxiter)
+                if info != 0:
+                    raise RuntimeError(f'minres did not converge for unconstrained solve (info={info}).')
                 w += dw
 
                 cur_norm = np.linalg.norm(dw)
                 if debug: print(f'[INFO] Current norm is {cur_norm}.')
                 if cur_norm < tol:
+                    converged = True
                     break
 
             else:
                 K = self._make_KKT_operator(gamma)
 
                 rhs = np.concatenate([-g, -(A @ w - b)])
-                sol, _ = minres(K, rhs, rtol=1e-8)
+                sol, info = minres(K, rhs, rtol=1e-10, maxiter=lin_maxiter)
+                if info != 0:
+                    raise RuntimeError(f'minres did not converge for constrained solve (info={info}).')
 
                 dw = sol[:n]
-
-                dw = sol[:self.n]
                 w += dw
 
                 cur_norm = np.linalg.norm(dw)
                 if debug: print(f'[INFO] Current norm is {cur_norm}.')
                 if cur_norm < tol:
+                    converged = True
                     break
 
         if debug:
             end = perf_counter()
             print(f'[INFO] Optimizer took {(end - start):.4g} seconds to finish.')
 
+        if not converged:
+            print(f"[WARN] FactorMVO _solve_fixed_gamma did not reach tol={tol}. "
+                  f"Final step norm={cur_norm:.3e}, iter={max_iter}, gamma={gamma}.")
+
         return w
 
-    def _solve_for_risk(self, target, gamma_init, tol= 1e-8, debug=False):
+    def _solve_for_risk(self, target, gamma_init, tol=1e-8, debug=False):
         """
-        Approx sqrt(w^T Cov w) = target by bisection.
+        Approximate sqrt(w^T Cov w) = target by bisection on gamma.
         """
         gamma_low = 1e-1
         gamma_high = 1e4
@@ -228,11 +395,15 @@ class FactorMVO:
             start = perf_counter()
             print(f'[INFO] Started optimizer with target active risk {target:.4g}.')
 
+        w_init = np.zeros(self.n)
+        reached = False
         for i in range(40):
-            w = self._solve_fixed_gamma(gamma)
+            w = self._solve_fixed_gamma(gamma, w0=w_init)
             r = self.risk(w)
+            w_init = w  # warm start the next solve
 
             if np.abs(r - target) < tol:
+                reached = True
                 break
             elif r < target:
                 gamma_high = gamma
@@ -247,33 +418,40 @@ class FactorMVO:
             end = perf_counter()
             print(f'[INFO] Optimizer with arget risk tuning took {(end - start):.4g} seconds to finish.')
 
-        return self._solve_fixed_gamma(gamma)
+        if not reached:
+            print(f"[WARN] FactorMVO _solve_for_risk did not reach target risk within tol={tol}. "
+                  f"Final risk={r:.3e}, target={target}, last gamma={gamma}.")
+
+        return self._solve_fixed_gamma(gamma, w0=w_init)
     
-def target_active_risk_weights(alpha, date):
-    beta = sfd.load_assets_by_date(date, True, ["date", "barrid", "predicted_beta"]).sort("barrid").select("predicted_beta").to_numpy() / 1e2
-    A = np.hstack([np.ones_like(beta), beta]).T    
-    factor_exposures = sfd.load_exposures(date, date, True, ["date", "barrid"] + factors)
-    specific_risk = sfd.load_assets_by_date(date, True, ["date", "barrid", "specific_risk"]) # The sfd load functions have their kwargs out of order :skull:
-    D = specific_risk.sort("barrid").fill_nan(0).fill_null(0).select('specific_risk').to_numpy().flatten() / 1e4
-    B = factor_exposures.sort("barrid").fill_nan(0).fill_null(0).select(factors).to_numpy()
-    F = _construct_factor_covariance_matrix(date).fill_nan(0).fill_null(0).select(factors).to_numpy() / 1e4
-    b = np.zeros((2))
-
-    solver = FactorMVO(alpha, B, F, D, A, b)
-    return solver.solve(gamma=100, active_risk_target=None, debug=True)
-
 if __name__ == "__main__":
-    df = pl.read_parquet('../data/russell_3000_daily.parquet').sort('barrid', 'date')
-    signals = add_signals(df)
+    # Benchmark using real data + add_signals-derived alphas.
+    from add_signals import add_signals  # Local import to avoid unused when imported as a module
 
-    start = perf_counter()
-    alpha = signals.filter(pl.col("date").eq(dt.date.fromisoformat('2013-06-03')))["momentum_alpha"].fill_nan(0).fill_null(0).to_numpy().flatten()
-    print(target_active_risk_weights(alpha, dt.date.fromisoformat('2013-06-03')))
-    end = perf_counter()
-    print(f'Total time for mine: {end - start} seconds')
+    signal = "momentum"
+    start_date = dt.date(2005, 1, 1)
+    end_date = dt.date(2005, 3, 31)
+    gamma = 3.0
 
-    start = perf_counter()
-    print(get_signal_weights.get_signal_weights(signals.lazy().filter(pl.col('date').eq(dt.date.fromisoformat('2013-06-03'))), 'momentum', dt.date.fromisoformat('2013-06-03'), dt.date.fromisoformat('2013-06-03'), gamma=50, constraints=[sfo.ZeroBeta(), get_signal_weights.NetZeroInvestment()]))
-    end = perf_counter()
-    print(f'Total time for old: {end - start} seconds')
-    
+    print(f"[BENCHMARK] Loading base data from data/russell_3000_daily.parquet...")
+    raw = pl.read_parquet("data/russell_3000_daily.parquet")
+    df_with_signals = add_signals(raw)
+
+    print(f"[BENCHMARK] Computing MVO for {signal} from {start_date} to {end_date}...")
+    total_start = perf_counter()
+
+    per_date_times = []
+    solved = 0
+    for date, mvo in iter_factor_mvos(start_date, end_date, signal, df_with_signals):
+        date_start = perf_counter()
+        _ = mvo.solve(gamma, max_iter=80, tol=1e-8)
+        per_date_times.append(perf_counter() - date_start)
+        solved += 1
+
+    total_elapsed = perf_counter() - total_start
+
+    if solved == 0:
+        print("[BENCHMARK] No dates solved; check data coverage for the chosen window/signal.")
+    else:
+        print(f"[BENCHMARK] Solved {solved} dates in {total_elapsed:.3f}s "
+              f"(avg {np.mean(per_date_times):.3f}s/date, median {np.median(per_date_times):.3f}s/date).")
