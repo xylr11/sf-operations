@@ -426,7 +426,7 @@ class FactorMVO:
     
 if __name__ == "__main__":
     # Benchmark using real data + add_signals-derived alphas.
-    from add_signals import add_signals  # Local import to avoid unused when imported as a module
+    from add_signals import add_signals
 
     signal = "momentum"
     start_date = dt.date(2005, 1, 1)
