@@ -195,10 +195,10 @@ def iter_factor_mvos(start, end, signal, df, A=None, b=None, L=None, d=None, d_f
 class FactorMVO:
     """
     Factor-model mean-variance optimizer that applies the factor covariance as a LinearOperator
-    (no explicit nxn covariance materialization).
+    (no explicit nxn covariance computation).
 
     Objective: maximize alpha^T w - (gamma / 2) * w^T Cov w,  Cov = B F B^T + diag(D)
-    Constraints: A w = b, optional L w <= d (not implemented here), or target active risk.
+    Constraints: A w = b, optional L w <= d (not implemented yet), or target active risk.
     """
 
     def __init__(self, alpha, B, F, D, A=None, b=None, L=None, d=None, d_floor=1e-8):
@@ -216,7 +216,7 @@ class FactorMVO:
     
     def _make_H_operator(self, gamma):
         """Return LinearOperator for Hessian gamma*Cov without forming Cov."""
-        n, k = self.B.shape
+        n, _ = self.B.shape # _ really means k
 
         def matvec(x):
             # x: length n
@@ -333,15 +333,16 @@ class FactorMVO:
 
             # Build KKT system:
             #
-            # [ H   Aᵀ ] [ Δw ] = - [ g ]
-            # [ A    0 ] [ Δgamma ]     [ r ]
+            # [ H   A^T ] [ dw ] = - [ g ]
+            # [ A    0  ] [ dl ]     [ r ]
             #
-            # where r = A w - b
+            # dw is the primal step; dl (lambda) is the dual step for the equality constraints.
+            # r = A w - b is the constraint residual.
             #
             # This is solved with block elimination:
             #
-            # Solve  H Δw + A^T Δµ = -g
-            #        A Δw         = -(Aw - b) What
+            # Solve  H dw + A^T dl = -g
+            #        A dw         = -(A w - b)
 
             if m == 0:
                 H_op = self._make_H_operator(gamma)
